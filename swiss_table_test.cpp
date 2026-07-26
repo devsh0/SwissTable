@@ -2,7 +2,7 @@
 #include <cstdio>
 #include "swiss_table.h"
 
-#define st_assert(cond) if (!(cond)) fail("test=%s, line=%d", __func__, __LINE__)
+#define st_assert(cond) if (!(cond)) { fail("test=%s, line=%d", __func__, __LINE__); return; }
 #define st_report_success() success(__func__)
 
 void fail(const char* fmt, ...) {
