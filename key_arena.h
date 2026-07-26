@@ -1,19 +1,23 @@
 #pragma once
 
 #include <cstdint>
+#include "misc.h"
 
-using u64 = uint64_t;
-
-static constexpr u64 MAX_KEY_LEN = 40;
-static constexpr u64 SLOT_SIZE = MAX_KEY_LEN + 1;
+static constexpr u64 MAX_KEY_LEN = 40 + 1;
 
 struct KeyArena {
-    char* base;
+    u8* base;
     u64 capacity;
     u64 cursor;
+    u8* old_base;
+    u64 old_capacity;
 
-    explicit KeyArena(u64 n_slots);
+    explicit KeyArena(u64 cap);
     ~KeyArena();
     char* allocate(const char* key);
+    bool is_full();
     void reset();
+    void map_and_prefault();
+    void begin_resize(u64 new_capacity);
+    void finish_resize();
 };

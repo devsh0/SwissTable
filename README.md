@@ -11,11 +11,15 @@ distinguishes empty from occupied slots.
 producing a bitmask of candidate slots.
 - **Group-linear probing**: On collision, probing advances one full group (32 slots) at a time.
 - **FNV-1a hash**: Bits 7+ select the group; bits 0-6 become the metadata tag.
+- **Dynamic resizing**: Grows at 87.5% load, shrinks at 25%. A same-capacity resize compacts the key arena  when insert-delete
+churn exhausts it.
+- **Key arena**: `mmap` based bump-pointer allocator. Keys are packed contiguously, i.e. allocation size varies based on key
+length. The arena is rebuilt and repopulated on resize.
 
 ## Deliberate simplifications
 
-- No resize (capacity set at construction)
-- Group-aligned probing (real Swiss Tables use unaligned starting positions)
+- Group-aligned probing.
+- Capacity must be a power of two and should be at least 32.
 
 ## Build
 
