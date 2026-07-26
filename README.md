@@ -16,12 +16,12 @@ producing a bitmask of candidate slots.
 
 - No resize (capacity set at construction)
 - Group-aligned probing (real Swiss Tables use unaligned starting positions)
-- Keys stored as borrowed pointers, not owned copies
 
 ## Build
 
 Requires an x86-64 target with AVX2:
 
 ```
-g++ -O2 -mavx2 -std=c++17 -o bench bench.cpp
+g++ -O2 -mavx2 -std=c++17 -o bench bench.cpp                # simple, mostly useless benchmark
+g++ -O2 -mavx2 -std=c++17 -o test swiss_table_test.cpp      # a bunch of tests
 ```

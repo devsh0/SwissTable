@@ -42,6 +42,9 @@ struct SwissTable {
     }
 
     ~SwissTable() {
+        for (u64 i = 0; i < total_slots; i++) {
+            free(table[i].key);
+        }
         delete[] table;
         delete[] metadata;
     }
@@ -53,7 +56,8 @@ struct SwissTable {
         u64 meta = h & 0x0000007f;
         slot = lookup_slot(key, meta, slot);
         if (slot != SLOT_NONE) {
-            // Key already exists.
+            free(table[slot].key);
+            table[slot].key = strdup(key);
             table[slot].value = value;
             return;
         }
@@ -62,7 +66,7 @@ struct SwissTable {
             slot = lookup_sentinel_slot_in_group(empty_slot_vec, leader_vec, slot_leader);
             if (slot != SLOT_NONE) {
                 // There's an empty slot available in this group.
-                table[slot].key = key;
+                table[slot].key = strdup(key);
                 table[slot].value = value;
                 metadata[slot] = meta;
                 return;
@@ -70,7 +74,7 @@ struct SwissTable {
             slot = lookup_sentinel_slot_in_group(tombstone_slot_vec, leader_vec, slot_leader);
             if (slot != SLOT_NONE) {
                 // There's a tombstone slot available in this group.
-                table[slot].key = key;
+                table[slot].key = strdup(key);
                 table[slot].value = value;
                 metadata[slot] = meta;
                 return;
@@ -96,6 +100,7 @@ struct SwissTable {
         slot = lookup_slot(key, meta, slot);
         if (slot != SLOT_NONE) {
             u32 old_value = table[slot].value;
+            free(table[slot].key);
             table[slot].key = nullptr;
             table[slot].value = VALUE_NIL;
             metadata[slot] = SLOT_TOMBSTONE;

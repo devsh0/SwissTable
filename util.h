@@ -11,7 +11,7 @@ using u32 = uint32_t;
 using u64 = uint64_t;
 
 struct Entry {
-    const char* key = nullptr;
+    char* key = nullptr;
     u32 value = 0;
 };
 

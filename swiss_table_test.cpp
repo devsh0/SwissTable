@@ -125,18 +125,15 @@ void test_dump_after_removal() {
 
 void test_high_load_factor() {
     SwissTable t;
-    char* keys[400];
+    char buf[16];
     for (u32 i = 0; i < 400; i++) {
-        keys[i] = new char[16];
-        snprintf(keys[i], 16, "k%u", i);
-        t.insert(keys[i], i);
+        snprintf(buf, sizeof(buf), "k%u", i);
+        t.insert(buf, i);
     }
     for (u32 i = 0; i < 400; i++) {
-        u32 v = t.lookup(keys[i]);
+        snprintf(buf, sizeof(buf), "k%u", i);
+        u32 v = t.lookup(buf);
         st_assert(v == i);
-    }
-    for (u32 i = 0; i < 400; i++) {
-        delete[] keys[i];
     }
     st_report_success();
 }
