@@ -1,4 +1,4 @@
-#include "swiss_table.cpp"
+#include "swiss_table.h"
 #include <unordered_map>
 #include <string>
 

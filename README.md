@@ -22,6 +22,6 @@ producing a bitmask of candidate slots.
 Requires an x86-64 target with AVX2:
 
 ```
-g++ -O2 -mavx2 -std=c++17 -o bench bench.cpp                # simple, mostly useless benchmark
+g++ -O2 -mavx2 -std=c++17 -o bench bench.cpp                # simple, mostly useless lookup benchmark
 g++ -O2 -mavx2 -std=c++17 -o test swiss_table_test.cpp      # a bunch of tests
 ```

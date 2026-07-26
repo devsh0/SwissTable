@@ -1,6 +1,6 @@
 #include <cstdarg>
 #include <cstdio>
-#include "swiss_table.cpp"
+#include "swiss_table.h"
 
 #define st_assert(cond) if (!(cond)) fail("test=%s, line=%d", __func__, __LINE__)
 #define st_report_success() success(__func__)

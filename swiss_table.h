@@ -1,12 +1,11 @@
-#include <cassert>
+#pragma once
 
-#include "util.h"
-#include "key_arena.cpp"
-#include <immintrin.h>
+#include <cassert>
 #include <cinttypes>
-#include <iostream>
+#include <immintrin.h>
+#include "key_arena.h"
 #include <limits>
-#include <unistd.h>
+#include "util.h"
 
 #define ERR_EXIT(m) \
     std::printf(m); \
@@ -188,7 +187,7 @@ private:
         }
         return SLOT_NONE;
     }
-    
+
     u64 lookup_sentinel_slot_in_group(__m256i sentinel_vec, __m256i leader_vec, u64 slot_leader) {
         auto res = _mm256_cmpeq_epi8(sentinel_vec, leader_vec);
         u32 match_mask = _mm256_movemask_epi8(res);
