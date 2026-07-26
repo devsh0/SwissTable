@@ -15,7 +15,6 @@ producing a bitmask of candidate slots.
 ## Deliberate simplifications
 
 - No resize (capacity set at construction)
-- No delete/tombstone support (this would be pretty easy to support, resize is where it gets complicated)
 - Group-aligned probing (real Swiss Tables use unaligned starting positions)
 - Keys stored as borrowed pointers, not owned copies
 
