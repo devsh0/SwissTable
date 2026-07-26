@@ -1,19 +1,9 @@
 #pragma once
 
 #include <chrono>
-#include <cstdint>
-#include <cstring>
 #include <unordered_set>
 #include <string>
-
-using u8 = uint8_t;
-using u32 = uint32_t;
-using u64 = uint64_t;
-
-struct Entry {
-    char* key = nullptr;
-    u32 value = 0;
-};
+#include "swiss_table.h"
 
 struct EntryGen {
     u64 state;
