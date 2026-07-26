@@ -6,7 +6,7 @@ lookups within 32-slot groups, following the same core design as Google's Abseil
 ## Design
 
 - **Metadata array**: Each slot has a 1-byte control tag. The lower 7 bits store a fragment of the key's hash; the high bit
-distinguishes empty (0x80) from occupied slots.
+distinguishes empty from occupied slots.
 - **SIMD probing**: `_mm256_cmpeq_epi8` compares a lookup's hash fragment against all 32 metadata bytes in a group simultaneously,
 producing a bitmask of candidate slots.
 - **Group-linear probing**: On collision, probing advances one full group (32 slots) at a time.

@@ -29,16 +29,9 @@ struct SwissTable {
     static constexpr u8 SLOT_EMPTY = 0x80;
     static constexpr u8 SLOT_TOMBSTONE = 0xfe;
 
-    u64 total_slots;
-    u64 total_groups;
-    __m256i empty_slot_vec;
-    __m256i tombstone_slot_vec;
-    Entry* table;
-    u8* metadata;
-    KeyArena arena;
-
     explicit SwissTable(u64 slots = 512);
     ~SwissTable();
+    u64 size();
     void insert(const char* key, u32 value);
     u32 lookup(const char* key);
     u32 remove(const char* key);
@@ -52,4 +45,13 @@ private:
     u64 lookup_group(const char* key, u32 match_mask, u64 slot_leader);
     // Searches for a sentinel slot within the group that begins at slot_leader.
     u64 lookup_sentinel_slot_in_group(__m256i sentinel_vec, __m256i leader_vec, u64 slot_leader);
+
+    u64 current_size;
+    u64 total_slots;
+    u64 total_groups;
+    __m256i empty_slot_vec;
+    __m256i tombstone_slot_vec;
+    Entry* table;
+    u8* metadata;
+    KeyArena arena;
 };

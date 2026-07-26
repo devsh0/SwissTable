@@ -124,7 +124,7 @@ void test_dump_after_removal() {
 }
 
 void test_high_load_factor() {
-    SwissTable t;
+    SwissTable t { /* slot_capacity */ 512 };
     char buf[16];
     for (u32 i = 0; i < 400; i++) {
         snprintf(buf, sizeof(buf), "k%u", i);
@@ -135,6 +135,19 @@ void test_high_load_factor() {
         u32 v = t.lookup(buf);
         st_assert(v == i);
     }
+    st_report_success();
+}
+
+void test_size() {
+    SwissTable t;
+    st_assert(t.size() == 0);
+    t.insert("one", 1);
+    t.insert("two", 2);
+    st_assert(t.size() == 2);
+    t.remove("one");
+    st_assert(t.size() == 1);
+    t.remove("two");
+    st_assert(t.size() == 0);
     st_report_success();
 }
 
@@ -149,5 +162,6 @@ int main() {
     test_probe_chain_across_groups();
     test_dump_after_removal();
     test_high_load_factor();
+    test_size();
     return 0;
 }

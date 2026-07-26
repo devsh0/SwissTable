@@ -2,7 +2,7 @@
 #include <cstring>
 #include "swiss_table.h"
 
-SwissTable::SwissTable(u64 slots) : total_slots(slots), total_groups(slots / GROUP_SIZE), arena(slots) {
+SwissTable::SwissTable(u64 slots) : current_size(0), total_slots(slots), total_groups(slots / GROUP_SIZE), arena(slots) {
     empty_slot_vec = _mm256_set1_epi8(SLOT_EMPTY);
     tombstone_slot_vec = _mm256_set1_epi8(SLOT_TOMBSTONE);
     table = new Entry[total_slots]();
@@ -15,6 +15,10 @@ SwissTable::~SwissTable() {
     delete[] metadata;
 }
 
+u64 SwissTable::size() {
+    return current_size;
+}
+
 void SwissTable::insert(const char* key, u32 value) {
     u64 h = hash(key);
     u64 slot = (h >> 7) % total_slots;
@@ -22,6 +26,7 @@ void SwissTable::insert(const char* key, u32 value) {
     u64 meta = h & 0x0000007f;
     slot = lookup_slot(key, meta, slot);
     if (slot != SLOT_NONE) {
+        // This key already exists. Just update the value.
         table[slot].key = arena.allocate(key);
         table[slot].value = value;
         return;
@@ -34,6 +39,7 @@ void SwissTable::insert(const char* key, u32 value) {
             table[slot].key = arena.allocate(key);
             table[slot].value = value;
             metadata[slot] = meta;
+            current_size += 1;
             return;
         }
         slot = lookup_sentinel_slot_in_group(tombstone_slot_vec, leader_vec, slot_leader);
@@ -42,6 +48,7 @@ void SwissTable::insert(const char* key, u32 value) {
             table[slot].key = arena.allocate(key);
             table[slot].value = value;
             metadata[slot] = meta;
+            current_size += 1;
             return;
         }
         slot_leader += GROUP_SIZE;
@@ -64,10 +71,12 @@ u32 SwissTable::remove(const char* key) {
     u64 meta = h & 0x0000007f;
     slot = lookup_slot(key, meta, slot);
     if (slot != SLOT_NONE) {
+        // The entry exists. Remove it.
         u32 old_value = table[slot].value;
         table[slot].key = nullptr;
         table[slot].value = VALUE_NIL;
         metadata[slot] = SLOT_TOMBSTONE;
+        current_size -= 1;
         return old_value;
     }
     return VALUE_NIL;
@@ -123,6 +132,13 @@ u64 SwissTable::lookup_slot(const char* key, u64 meta, u64 slot) {
         if (match_slot != SLOT_NONE) {
             return match_slot;
         }
+        // Key doesn't exist in this group. If this group has even a single
+        // empty slot, that means this key was never inserted in the hashmap.
+        // If the key were to be inserted, the empty slot would have been occupied.
+        // The crucial thing to understand is that probe sequence of groups
+        // across insert and lookup will always be the same. This implies
+        // that during lookup, if the current group has an empty slot, this
+        // key was never inserted.
         if (lookup_sentinel_slot_in_group(empty_slot_vec, v2, slot_leader) != SLOT_NONE) {
             return SLOT_NONE;
         }
