@@ -27,7 +27,6 @@ void SwissTable::insert(const char* key, u32 value) {
     slot = lookup_slot(key, meta, slot);
     if (slot != SLOT_NONE) {
         // This key already exists. Just update the value.
-        table[slot].key = arena.allocate(key);
         table[slot].value = value;
         return;
     }
