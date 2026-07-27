@@ -1,78 +1,313 @@
-#include "util.h"
-#include <unordered_map>
 #include <string>
+#include <unordered_map>
+#include "util.h"
+#include <vector>
 
 struct Result {
     u64 n_entries;
-    u64 swiss_ns_per_lookup;
-    u64 std_ns_per_lookup;
+    u64 total_slots;
+    u64 swiss_ns;
+    u64 std_ns;
 };
 
-Result bench(u64 total_slots) {
-    u64 n_entries = total_slots * 3 / 4;
-    u64 n_lookups = 1'000'000;
-    const char* bogus_key = "bogus";
-
-    EntryGen generator(/* seed */12345);
+// Pre-populate both maps with n_entries, returning generated entries for reuse.
+// Caller owns the returned entries and must free them.
+static Entry* populate(SwissTable& st, std::unordered_map<std::string, u32>& stdmap, u64 total_slots, u64 n_entries, u64 seed) {
+    EntryGen gen(seed);
     Entry* entries = new Entry[n_entries];
-    generator.generate_n(entries, n_entries);
+    gen.generate_n(entries, n_entries);
+    for (u64 i = 0; i < n_entries; i++) {
+        st.insert(entries[i].key, entries[i].value);
+        stdmap[entries[i].key] = entries[i].value;
+    }
+    return entries;
+}
+
+static void free_entries(Entry* entries, u64 n) {
+    for (u64 i = 0; i < n; i++) delete[] entries[i].key;
+    delete[] entries;
+}
+
+// ---------------------------------------------------------------------------
+// Bench 1: Lookup-heavy
+//   Pre-populate the map, then do 1M lookups. ~95% hit existing keys,
+//   ~5% miss (bogus keys). No inserts or deletes during the timed section.
+// ---------------------------------------------------------------------------
+static Result bench_lookup(u64 total_slots) {
+    u64 n_entries = total_slots * 3 / 4;
+    u64 n_ops = 1'000'000;
+    const char* bogus_key = "key_that_does_not_exist";
+
+    SwissTable st(total_slots);
+    std::unordered_map<std::string, u32> stdmap;
+    stdmap.reserve(n_entries);
+    Entry* entries = populate(st, stdmap, total_slots, n_entries, 12345);
 
     // --- SwissTable ---
-    SwissTable table(total_slots);
-    for (u64 i = 0; i < n_entries; i++) {
-        table.insert(entries[i].key, entries[i].value);
+    u64 t0 = ns();
+    for (u64 i = 0; i < n_ops; i++) {
+        if (i % 20 == 0) {
+            st.lookup(bogus_key);
+        } else {
+            Entry& e = entries[i % n_entries];
+            u32 v = st.lookup(e.key);
+            if (v != e.value) {
+                ERR_EXIT("bench_lookup: swiss mismatch\n");
+            }
+        }
+    }
+    u64 swiss_elapsed = ns() - t0;
+
+    // --- std::unordered_map ---
+    t0 = ns();
+    for (u64 i = 0; i < n_ops; i++) {
+        if (i % 20 == 0) {
+            stdmap.find(bogus_key);
+        } else {
+            Entry& e = entries[i % n_entries];
+            auto it = stdmap.find(e.key);
+            if (it == stdmap.end() || it->second != e.value) {
+                ERR_EXIT("bench_lookup: stdmap mismatch\n");
+            }
+        }
+    }
+    u64 std_elapsed = ns() - t0;
+
+    free_entries(entries, n_entries);
+    return { n_entries, total_slots, swiss_elapsed / n_ops, std_elapsed / n_ops };
+}
+
+// ---------------------------------------------------------------------------
+// Bench 2: Insert-delete heavy
+//   Pre-populate the map to 50% load, then do 1M ops that are alternating
+//   insert/delete: insert a fresh key, then delete a random existing key.
+//   This churns tombstones and stresses the insert/delete path.
+// ---------------------------------------------------------------------------
+static Result bench_insert_delete(u64 total_slots) {
+    u64 n_prefill = total_slots / 2;
+    u64 n_ops = 500'000;
+
+    EntryGen gen(54321);
+    Entry* prefill = new Entry[n_prefill];
+    gen.generate_n(prefill, n_prefill);
+
+    // Extra keys to insert during the benchmark.
+    Entry* extra = new Entry[n_ops];
+    gen.generate_n(extra, n_ops);
+
+    // --- SwissTable ---
+    SwissTable st(total_slots);
+    for (u64 i = 0; i < n_prefill; i++) {
+        st.insert(prefill[i].key, prefill[i].value);
     }
 
+    // Track which prefill keys are still present for deletion.
+    std::vector<u64> live_indices;
+    live_indices.reserve(n_prefill);
+    for (u64 i = 0; i < n_prefill; i++) {
+        live_indices.push_back(i);
+    }
+    EntryGen idx_gen(99999);
+
     u64 t0 = ns();
-    for (u64 i = 0; i < n_lookups; i++) {
-        if (i % 21 == 0) {
-            table.lookup(bogus_key);
-            continue;
-        }
-        Entry e = entries[i % n_entries];
-        u32 v = table.lookup(e.key);
-        if (v != e.value) {
-            ERR_EXIT("SwissTable: unexpected value!\n");
+    for (u64 i = 0; i < n_ops; i++) {
+        st.insert(extra[i].key, extra[i].value);
+        // Delete a random live prefill key.
+        if (!live_indices.empty()) {
+            u64 pick = idx_gen.next_u64() % live_indices.size();
+            st.remove(prefill[live_indices[pick]].key);
+            live_indices[pick] = live_indices.back();
+            live_indices.pop_back();
         }
     }
     u64 swiss_elapsed = ns() - t0;
 
     // --- std::unordered_map ---
     std::unordered_map<std::string, u32> stdmap;
-    stdmap.reserve(n_entries);
-    for (u64 i = 0; i < n_entries; i++) {
-        stdmap[entries[i].key] = entries[i].value;
+    stdmap.reserve(n_prefill);
+    for (u64 i = 0; i < n_prefill; i++) {
+        stdmap[prefill[i].key] = prefill[i].value;
     }
 
+    live_indices.clear();
+    for (u64 i = 0; i < n_prefill; i++) live_indices.push_back(i);
+    idx_gen = EntryGen(99999);
+
     t0 = ns();
-    for (u64 i = 0; i < n_lookups; i++) {
-        if (i % 21 == 0) {
-            stdmap.find(bogus_key);
-            continue;
-        }
-        Entry e = entries[i % n_entries];
-        auto it = stdmap.find(e.key);
-        if (it == stdmap.end() || it->second != e.value) {
-            ERR_EXIT("stdmap: unexpected value!\n");
+    for (u64 i = 0; i < n_ops; i++) {
+        stdmap[extra[i].key] = extra[i].value;
+        if (!live_indices.empty()) {
+            u64 pick = idx_gen.next_u64() % live_indices.size();
+            stdmap.erase(prefill[live_indices[pick]].key);
+            live_indices[pick] = live_indices.back();
+            live_indices.pop_back();
         }
     }
     u64 std_elapsed = ns() - t0;
 
-    for (u64 i = 0; i < n_entries; i++) {
-        delete[] entries[i].key;
+    u64 ops_total = n_ops * 2;
+    free_entries(prefill, n_prefill);
+    free_entries(extra, n_ops);
+    return { n_prefill, total_slots, swiss_elapsed / ops_total, std_elapsed / ops_total };
+}
+
+// ---------------------------------------------------------------------------
+// Bench 3: Mixed workload
+//   Pre-populate to 50% load, then do 1M ops with roughly equal parts
+//   insert, delete, and lookup (rotating through them).
+// ---------------------------------------------------------------------------
+static Result bench_mixed(u64 total_slots) {
+    u64 n_prefill = total_slots / 2;
+    u64 n_rounds = 300'000;
+
+    EntryGen gen(67890);
+    Entry* prefill = new Entry[n_prefill];
+    gen.generate_n(prefill, n_prefill);
+
+    Entry* extra = new Entry[n_rounds];
+    gen.generate_n(extra, n_rounds);
+
+    // --- SwissTable ---
+    SwissTable st(total_slots);
+    for (u64 i = 0; i < n_prefill; i++) st.insert(prefill[i].key, prefill[i].value);
+
+    std::vector<u64> live_indices;
+    live_indices.reserve(n_prefill);
+    for (u64 i = 0; i < n_prefill; i++) live_indices.push_back(i);
+    EntryGen idx_gen(11111);
+
+    u64 t0 = ns();
+    for (u64 i = 0; i < n_rounds; i++) {
+        // Insert
+        st.insert(extra[i].key, extra[i].value);
+        // Delete
+        if (!live_indices.empty()) {
+            u64 pick = idx_gen.next_u64() % live_indices.size();
+            st.remove(prefill[live_indices[pick]].key);
+            live_indices[pick] = live_indices.back();
+            live_indices.pop_back();
+        }
+        // Lookup (hit)
+        Entry& e = prefill[i % n_prefill];
+        st.lookup(e.key);
     }
-    delete[] entries;
-    return { n_entries, swiss_elapsed / n_lookups, std_elapsed / n_lookups };
+    u64 swiss_elapsed = ns() - t0;
+
+    // --- std::unordered_map ---
+    std::unordered_map<std::string, u32> stdmap;
+    stdmap.reserve(n_prefill);
+    for (u64 i = 0; i < n_prefill; i++) {
+        stdmap[prefill[i].key] = prefill[i].value;
+    }
+
+    live_indices.clear();
+    for (u64 i = 0; i < n_prefill; i++) {
+        live_indices.push_back(i);
+    }
+    idx_gen = EntryGen(11111);
+
+    t0 = ns();
+    for (u64 i = 0; i < n_rounds; i++) {
+        stdmap[extra[i].key] = extra[i].value;
+        if (!live_indices.empty()) {
+            u64 pick = idx_gen.next_u64() % live_indices.size();
+            stdmap.erase(prefill[live_indices[pick]].key);
+            live_indices[pick] = live_indices.back();
+            live_indices.pop_back();
+        }
+        Entry& e = prefill[i % n_prefill];
+        stdmap.find(e.key);
+    }
+    u64 std_elapsed = ns() - t0;
+
+    u64 ops_total = n_rounds * 3;
+    free_entries(prefill, n_prefill);
+    free_entries(extra, n_rounds);
+    return { n_prefill, total_slots, swiss_elapsed / ops_total, std_elapsed / ops_total };
+}
+
+// ---------------------------------------------------------------------------
+// Bench 4: Resize-heavy
+//   Start from a small table (32 slots) and insert n_entries keys, forcing
+//   many grow-resizes. Then delete most of them, forcing shrink-resizes.
+//   Measures total wall time for the whole sequence.
+// ---------------------------------------------------------------------------
+static Result bench_resize(u64 n_entries) {
+    EntryGen gen(24680);
+    Entry* entries = new Entry[n_entries];
+    gen.generate_n(entries, n_entries);
+
+    u64 n_deletes = n_entries * 3 / 4;
+
+    // --- SwissTable ---
+    SwissTable st(32);
+
+    u64 t0 = ns();
+    for (u64 i = 0; i < n_entries; i++) {
+        st.insert(entries[i].key, entries[i].value);
+    }
+    for (u64 i = 0; i < n_deletes; i++) {
+        st.remove(entries[i].key);
+    }
+    u64 swiss_elapsed = ns() - t0;
+
+    // --- std::unordered_map ---
+    std::unordered_map<std::string, u32> stdmap;
+
+    t0 = ns();
+    for (u64 i = 0; i < n_entries; i++) {
+        stdmap[entries[i].key] = entries[i].value;
+    }
+    for (u64 i = 0; i < n_deletes; i++) {
+        stdmap.erase(entries[i].key);
+    }
+    u64 std_elapsed = ns() - t0;
+
+    u64 ops_total = n_entries + n_deletes;
+    free_entries(entries, n_entries);
+    return { n_entries, 32, swiss_elapsed / ops_total, std_elapsed / ops_total };
+}
+
+static void print_header(const char* title) {
+    std::printf("\n  --- %s ---\n", title);
+    std::printf("  %10s | %10s | %12s | %12s | %7s\n", "entries", "slots", "swiss (ns)", "stdmap (ns)", "speedup");
+    std::printf("  -----------+------------+--------------+--------------+--------\n");
+}
+
+static void print_row(Result& r) {
+    double speedup = (double)r.std_ns / (double)r.swiss_ns;
+    std::printf("  %10" PRIu64 " | %10" PRIu64 " | %12" PRIu64 " | %12" PRIu64 " | %6.2fx\n",
+                r.n_entries, r.total_slots, r.swiss_ns, r.std_ns, speedup);
 }
 
 int main() {
-    std::printf("\n");
-    std::printf("  %10s | %10s | %12s | %12s | %7s\n", "entries", "slots", "swiss (ns)", "stdmap (ns)", "speedup");
-    std::printf("  -----------+------------+--------------+--------------+--------\n");
-    for (u64 slots = 512; slots <= 1'048'576; slots *= 2) {
-        Result r = bench(slots);
-        double speedup = (double)r.std_ns_per_lookup / (double)r.swiss_ns_per_lookup;
-        std::printf("  %10" PRIu64 " | %10" PRIu64 " | %12" PRIu64 " | %12" PRIu64 " | %6.2fx\n", r.n_entries, slots, r.swiss_ns_per_lookup, r.std_ns_per_lookup, speedup);
+    // Bench 1: Lookup-heavy
+    print_header("Lookup-heavy (95% hit, 5% miss)");
+    for (u64 slots = 1024; slots <= 1'048'576; slots *= 2) {
+        Result r = bench_lookup(slots);
+        print_row(r);
     }
+
+    // Bench 2: Insert-delete heavy
+    print_header("Insert-delete heavy (alternating insert + delete)");
+    for (u64 slots = 1024; slots <= 1'048'576; slots *= 2) {
+        Result r = bench_insert_delete(slots);
+        print_row(r);
+    }
+
+    // Bench 3: Mixed workload
+    print_header("Mixed (insert + delete + lookup, equal parts)");
+    for (u64 slots = 1024; slots <= 1'048'576; slots *= 2) {
+        Result r = bench_mixed(slots);
+        print_row(r);
+    }
+
+    // Bench 4: Resize-heavy
+    print_header("Resize-heavy (grow from 32 slots, then shrink)");
+    for (u64 n = 768; n <= 786'432; n *= 2) {
+        Result r = bench_resize(n);
+        print_row(r);
+    }
+
     std::printf("\n");
 }
