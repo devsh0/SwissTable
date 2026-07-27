@@ -42,11 +42,10 @@ void KeyArena::finish_resize() {
     old_capacity = 0;
 }
 
-char* KeyArena::allocate(const char* key) {
-    u64 len = strlen(key);
+char* KeyArena::allocate(const char* key, int key_len) {
     u8* dst = base + cursor;
-    memcpy(dst, key, len + 1);
-    cursor += len + 1;
+    memcpy(dst, key, key_len + 1);
+    cursor += key_len + 1;
     return (char*)dst;
 }
 

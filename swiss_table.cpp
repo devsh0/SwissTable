@@ -65,7 +65,8 @@ u64 SwissTable::size() {
 }
 
 void SwissTable::insert(const char* key, u32 value) {
-    if (strlen(key) >= MAX_KEY_LEN) {
+    int key_len = strlen(key);
+    if (key_len >= MAX_KEY_LEN) {
         ERR_EXIT("Key too large!\n");
     }
     if (should_grow()) {
@@ -92,7 +93,7 @@ void SwissTable::insert(const char* key, u32 value) {
         slot = lookup_sentinel_slot_in_group(empty_slot_vec, leader_vec, slot_leader);
         if (slot != SLOT_NONE) {
             // Empty slot found.
-            table[slot].key = arena.allocate(key);
+            table[slot].key = arena.allocate(key, key_len);
             table[slot].value = value;
             metadata[slot] = meta;
             current_size += 1;
@@ -101,7 +102,7 @@ void SwissTable::insert(const char* key, u32 value) {
         slot = lookup_sentinel_slot_in_group(tombstone_slot_vec, leader_vec, slot_leader);
         if (slot != SLOT_NONE) {
             // Tombstone slot found.
-            table[slot].key = arena.allocate(key);
+            table[slot].key = arena.allocate(key, key_len);
             table[slot].value = value;
             metadata[slot] = meta;
             current_size += 1;

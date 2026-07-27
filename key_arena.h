@@ -14,7 +14,7 @@ struct KeyArena {
 
     explicit KeyArena(u64 cap);
     ~KeyArena();
-    char* allocate(const char* key);
+    char* allocate(const char* key, int key_len);
     bool is_full();
     void reset();
     void map_and_prefault();
