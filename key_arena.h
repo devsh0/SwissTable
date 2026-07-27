@@ -1,6 +1,5 @@
 #pragma once
 
-#include <cstdint>
 #include "misc.h"
 
 static constexpr u64 MAX_KEY_LEN = 40 + 1;

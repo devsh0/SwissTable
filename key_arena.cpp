@@ -1,8 +1,7 @@
 #include <cstdlib>
+#include <cstdio>
 #include <cstring>
 #include "key_arena.h"
-
-#include <cstdio>
 #include <sys/mman.h>
 
 KeyArena::KeyArena(u64 cap) :

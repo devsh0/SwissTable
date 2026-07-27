@@ -1,7 +1,6 @@
 #include <cstdio>
 #include <cstring>
 #include "swiss_table.h"
-
 #include <sys/mman.h>
 
 SwissTable::SwissTable(u64 initial_capacity) :
