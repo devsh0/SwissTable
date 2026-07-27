@@ -12,7 +12,7 @@ struct Result {
 
 // Pre-populate both maps with n_entries, returning generated entries for reuse.
 // Caller owns the returned entries and must free them.
-static Entry* populate(SwissTable& st, std::unordered_map<std::string, u32>& stdmap, u64 total_slots, u64 n_entries, u64 seed) {
+static Entry* populate(SwissTable& st, std::unordered_map<std::string, u32>& stdmap, u64 n_entries, u64 seed) {
     EntryGen gen(seed);
     Entry* entries = new Entry[n_entries];
     gen.generate_n(entries, n_entries);
@@ -41,7 +41,7 @@ static Result bench_lookup(u64 total_slots) {
     SwissTable st(total_slots);
     std::unordered_map<std::string, u32> stdmap;
     stdmap.reserve(n_entries);
-    Entry* entries = populate(st, stdmap, total_slots, n_entries, 12345);
+    Entry* entries = populate(st, stdmap, n_entries, 12345);
 
     // --- SwissTable ---
     u64 t0 = ns();
@@ -79,21 +79,34 @@ static Result bench_lookup(u64 total_slots) {
 
 // ---------------------------------------------------------------------------
 // Bench 2: Insert-delete heavy
-//   Pre-populate the map to 50% load, then do 1M ops that are alternating
-//   insert/delete: insert a fresh key, then delete a random existing key.
-//   This churns tombstones and stresses the insert/delete path.
+//   Pre-populate the map to 50% load, then do alternating insert/delete.
+//   The deletion schedule is pre-computed so the timed loop is pure map ops.
 // ---------------------------------------------------------------------------
 static Result bench_insert_delete(u64 total_slots) {
     u64 n_prefill = total_slots / 2;
-    u64 n_ops = 500'000;
+    u64 n_ops = n_prefill < 500'000 ? n_prefill : 500'000;
 
     EntryGen gen(54321);
     Entry* prefill = new Entry[n_prefill];
     gen.generate_n(prefill, n_prefill);
 
-    // Extra keys to insert during the benchmark.
     Entry* extra = new Entry[n_ops];
     gen.generate_n(extra, n_ops);
+
+    // Pre-compute which prefill key to delete at each step.
+    const char** delete_keys = new const char*[n_ops];
+    {
+        std::vector<u64> live;
+        live.reserve(n_prefill);
+        for (u64 i = 0; i < n_prefill; i++) live.push_back(i);
+        EntryGen idx_gen(99999);
+        for (u64 i = 0; i < n_ops; i++) {
+            u64 pick = idx_gen.next_u64() % live.size();
+            delete_keys[i] = prefill[live[pick]].key;
+            live[pick] = live.back();
+            live.pop_back();
+        }
+    }
 
     // --- SwissTable ---
     SwissTable st(total_slots);
@@ -101,24 +114,10 @@ static Result bench_insert_delete(u64 total_slots) {
         st.insert(prefill[i].key, prefill[i].value);
     }
 
-    // Track which prefill keys are still present for deletion.
-    std::vector<u64> live_indices;
-    live_indices.reserve(n_prefill);
-    for (u64 i = 0; i < n_prefill; i++) {
-        live_indices.push_back(i);
-    }
-    EntryGen idx_gen(99999);
-
     u64 t0 = ns();
     for (u64 i = 0; i < n_ops; i++) {
         st.insert(extra[i].key, extra[i].value);
-        // Delete a random live prefill key.
-        if (!live_indices.empty()) {
-            u64 pick = idx_gen.next_u64() % live_indices.size();
-            st.remove(prefill[live_indices[pick]].key);
-            live_indices[pick] = live_indices.back();
-            live_indices.pop_back();
-        }
+        st.remove(delete_keys[i]);
     }
     u64 swiss_elapsed = ns() - t0;
 
@@ -129,23 +128,15 @@ static Result bench_insert_delete(u64 total_slots) {
         stdmap[prefill[i].key] = prefill[i].value;
     }
 
-    live_indices.clear();
-    for (u64 i = 0; i < n_prefill; i++) live_indices.push_back(i);
-    idx_gen = EntryGen(99999);
-
     t0 = ns();
     for (u64 i = 0; i < n_ops; i++) {
         stdmap[extra[i].key] = extra[i].value;
-        if (!live_indices.empty()) {
-            u64 pick = idx_gen.next_u64() % live_indices.size();
-            stdmap.erase(prefill[live_indices[pick]].key);
-            live_indices[pick] = live_indices.back();
-            live_indices.pop_back();
-        }
+        stdmap.erase(delete_keys[i]);
     }
     u64 std_elapsed = ns() - t0;
 
     u64 ops_total = n_ops * 2;
+    delete[] delete_keys;
     free_entries(prefill, n_prefill);
     free_entries(extra, n_ops);
     return { n_prefill, total_slots, swiss_elapsed / ops_total, std_elapsed / ops_total };
@@ -153,12 +144,12 @@ static Result bench_insert_delete(u64 total_slots) {
 
 // ---------------------------------------------------------------------------
 // Bench 3: Mixed workload
-//   Pre-populate to 50% load, then do 1M ops with roughly equal parts
-//   insert, delete, and lookup (rotating through them).
+//   Pre-populate to 50% load, then do equal parts insert, delete, lookup.
+//   All schedules are pre-computed so the timed loop is pure map ops.
 // ---------------------------------------------------------------------------
 static Result bench_mixed(u64 total_slots) {
     u64 n_prefill = total_slots / 2;
-    u64 n_rounds = 300'000;
+    u64 n_rounds = n_prefill < 300'000 ? n_prefill : 300'000;
 
     EntryGen gen(67890);
     Entry* prefill = new Entry[n_prefill];
@@ -167,29 +158,34 @@ static Result bench_mixed(u64 total_slots) {
     Entry* extra = new Entry[n_rounds];
     gen.generate_n(extra, n_rounds);
 
+    // Pre-compute delete and lookup schedules.
+    const char** delete_keys = new const char*[n_rounds];
+    const char** lookup_keys = new const char*[n_rounds];
+    {
+        std::vector<u64> live;
+        live.reserve(n_prefill);
+        for (u64 i = 0; i < n_prefill; i++) live.push_back(i);
+        EntryGen idx_gen(11111);
+        for (u64 i = 0; i < n_rounds; i++) {
+            u64 pick = idx_gen.next_u64() % live.size();
+            delete_keys[i] = prefill[live[pick]].key;
+            live[pick] = live.back();
+            live.pop_back();
+            lookup_keys[i] = prefill[i % n_prefill].key;
+        }
+    }
+
     // --- SwissTable ---
     SwissTable st(total_slots);
-    for (u64 i = 0; i < n_prefill; i++) st.insert(prefill[i].key, prefill[i].value);
-
-    std::vector<u64> live_indices;
-    live_indices.reserve(n_prefill);
-    for (u64 i = 0; i < n_prefill; i++) live_indices.push_back(i);
-    EntryGen idx_gen(11111);
+    for (u64 i = 0; i < n_prefill; i++) {
+        st.insert(prefill[i].key, prefill[i].value);
+    }
 
     u64 t0 = ns();
     for (u64 i = 0; i < n_rounds; i++) {
-        // Insert
         st.insert(extra[i].key, extra[i].value);
-        // Delete
-        if (!live_indices.empty()) {
-            u64 pick = idx_gen.next_u64() % live_indices.size();
-            st.remove(prefill[live_indices[pick]].key);
-            live_indices[pick] = live_indices.back();
-            live_indices.pop_back();
-        }
-        // Lookup (hit)
-        Entry& e = prefill[i % n_prefill];
-        st.lookup(e.key);
+        st.remove(delete_keys[i]);
+        st.lookup(lookup_keys[i]);
     }
     u64 swiss_elapsed = ns() - t0;
 
@@ -200,27 +196,17 @@ static Result bench_mixed(u64 total_slots) {
         stdmap[prefill[i].key] = prefill[i].value;
     }
 
-    live_indices.clear();
-    for (u64 i = 0; i < n_prefill; i++) {
-        live_indices.push_back(i);
-    }
-    idx_gen = EntryGen(11111);
-
     t0 = ns();
     for (u64 i = 0; i < n_rounds; i++) {
         stdmap[extra[i].key] = extra[i].value;
-        if (!live_indices.empty()) {
-            u64 pick = idx_gen.next_u64() % live_indices.size();
-            stdmap.erase(prefill[live_indices[pick]].key);
-            live_indices[pick] = live_indices.back();
-            live_indices.pop_back();
-        }
-        Entry& e = prefill[i % n_prefill];
-        stdmap.find(e.key);
+        stdmap.erase(delete_keys[i]);
+        stdmap.find(lookup_keys[i]);
     }
     u64 std_elapsed = ns() - t0;
 
     u64 ops_total = n_rounds * 3;
+    delete[] delete_keys;
+    delete[] lookup_keys;
     free_entries(prefill, n_prefill);
     free_entries(extra, n_rounds);
     return { n_prefill, total_slots, swiss_elapsed / ops_total, std_elapsed / ops_total };
