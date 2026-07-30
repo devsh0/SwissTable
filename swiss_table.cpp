@@ -78,7 +78,8 @@ void SwissTable::insert(const char* key, u32 value) {
         resize(capacity);
     }
     u64 h = hash(key);
-    u64 slot = (h >> 7) % capacity;
+    // Does (h >> 7) % capacity, given capacity is a power of 2.
+    u64 slot = (h >> 7) & (capacity - 1);
     u64 slot_leader = (slot / GROUP_SIZE) * GROUP_SIZE;
     u64 meta = h & 0x0000007f;
     slot = lookup_slot(key, meta, slot);
@@ -115,7 +116,8 @@ void SwissTable::insert(const char* key, u32 value) {
 
 u32 SwissTable::lookup(const char* key) {
     u64 h = hash(key);
-    u64 slot = (h >> 7) % capacity;
+    // Does (h >> 7) % capacity, given capacity is a power of 2.
+    u64 slot = (h >> 7) & (capacity - 1);
     u64 meta = h & 0x0000007f;
     slot = lookup_slot(key, meta, slot);
     return slot == SLOT_NONE ? VALUE_NIL : table[slot].value;
@@ -123,7 +125,8 @@ u32 SwissTable::lookup(const char* key) {
 
 u32 SwissTable::remove(const char* key) {
     u64 h = hash(key);
-    u64 slot = (h >> 7) % capacity;
+    // Does (h >> 7) % capacity, given capacity is a power of 2.
+    u64 slot = (h >> 7) & (capacity - 1);
     u64 meta = h & 0x0000007f;
     slot = lookup_slot(key, meta, slot);
     if (slot != SLOT_NONE) {
