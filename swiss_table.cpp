@@ -174,9 +174,11 @@ void SwissTable::dump() {
 }
 
 u64 SwissTable::hash(const char* key) {
+    // Consider no more than 8 characters;
+    int limit = 8;
     u64 h = 0xcbf29ce484222325ULL;
-    while (*key) {
-        h ^= static_cast<u8>(*key);
+    for (int i = 0; *key && i < limit; i++) {
+        h ^= (u8)(*key);
         h *= 0x100000001b3ULL;
         key += 1;
     }
