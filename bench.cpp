@@ -3,15 +3,17 @@
 #include <unordered_map>
 #include "util.h"
 #include <vector>
+#include "absl/container/flat_hash_map.h"
 
 struct Result {
     u64 n_entries;
     u64 total_slots;
     u64 swiss_ns;
     u64 std_ns;
+    u64 absl_ns;
 };
 
-// Pre-populate both maps with n_entries, returning generated entries for reuse.
+// Pre-populate SwissTable and stdmap with n_entries, returning generated entries for reuse.
 // Caller owns the returned entries and must free them.
 static Entry* populate(SwissTable& st, std::unordered_map<std::string, u32>& stdmap, u64 n_entries, u64 seed) {
     EntryGen gen(seed);
@@ -31,13 +33,12 @@ static void free_entries(Entry* entries, u64 n) {
 
 // ---------------------------------------------------------------------------
 // Bench 1: Lookup-heavy
-//   Pre-populate the map, then do 1M lookups. ~95% hit existing keys,
-//   ~5% miss (bogus keys). No inserts or deletes during the timed section.
+//   Pre-populate the map, then do 1M lookups (100% hit).
+//   No inserts or deletes during the timed section.
 // ---------------------------------------------------------------------------
 static Result bench_lookup(u64 total_slots) {
     u64 n_entries = total_slots * 3 / 4;
     u64 n_ops = 1'000'000;
-    const char* bogus_key = "key_that_does_not_exist";
 
     SwissTable st(total_slots);
     std::unordered_map<std::string, u32> stdmap;
@@ -47,14 +48,10 @@ static Result bench_lookup(u64 total_slots) {
     // --- SwissTable ---
     u64 t0 = ns();
     for (u64 i = 0; i < n_ops; i++) {
-        if (i % 20 == 0) {
-            st.lookup(bogus_key);
-        } else {
-            Entry& e = entries[i % n_entries];
-            u32 v = st.lookup(e.key);
-            if (v != e.value) {
-                ERR_EXIT("bench_lookup: swiss mismatch\n");
-            }
+        Entry& e = entries[i % n_entries];
+        u32 v = st.lookup(e.key);
+        if (v != e.value) {
+            ERR_EXIT("bench_lookup: swiss mismatch\n");
         }
     }
     u64 swiss_elapsed = ns() - t0;
@@ -62,20 +59,33 @@ static Result bench_lookup(u64 total_slots) {
     // --- std::unordered_map ---
     t0 = ns();
     for (u64 i = 0; i < n_ops; i++) {
-        if (i % 20 == 0) {
-            stdmap.find(bogus_key);
-        } else {
-            Entry& e = entries[i % n_entries];
-            auto it = stdmap.find(e.key);
-            if (it == stdmap.end() || it->second != e.value) {
-                ERR_EXIT("bench_lookup: stdmap mismatch\n");
-            }
+        Entry& e = entries[i % n_entries];
+        auto it = stdmap.find(e.key);
+        if (it == stdmap.end() || it->second != e.value) {
+            ERR_EXIT("bench_lookup: stdmap mismatch\n");
         }
     }
     u64 std_elapsed = ns() - t0;
 
+    // --- absl::flat_hash_map ---
+    absl::flat_hash_map<std::string, u32> absmap;
+    absmap.reserve(n_entries);
+    for (u64 i = 0; i < n_entries; i++) {
+        absmap[entries[i].key] = entries[i].value;
+    }
+
+    t0 = ns();
+    for (u64 i = 0; i < n_ops; i++) {
+        Entry& e = entries[i % n_entries];
+        auto it = absmap.find(e.key);
+        if (it == absmap.end() || it->second != e.value) {
+            ERR_EXIT("bench_lookup: abseil mismatch\n");
+        }
+    }
+    u64 absl_elapsed = ns() - t0;
+
     free_entries(entries, n_entries);
-    return { n_entries, total_slots, swiss_elapsed / n_ops, std_elapsed / n_ops };
+    return { n_entries, total_slots, swiss_elapsed / n_ops, std_elapsed / n_ops, absl_elapsed / n_ops };
 }
 
 // ---------------------------------------------------------------------------
@@ -136,11 +146,25 @@ static Result bench_insert_delete(u64 total_slots) {
     }
     u64 std_elapsed = ns() - t0;
 
+    // --- absl::flat_hash_map ---
+    absl::flat_hash_map<std::string, u32> absmap;
+    absmap.reserve(n_prefill);
+    for (u64 i = 0; i < n_prefill; i++) {
+        absmap[prefill[i].key] = prefill[i].value;
+    }
+
+    t0 = ns();
+    for (u64 i = 0; i < n_ops; i++) {
+        absmap[extra[i].key] = extra[i].value;
+        absmap.erase(delete_keys[i]);
+    }
+    u64 absl_elapsed = ns() - t0;
+
     u64 ops_total = n_ops * 2;
     delete[] delete_keys;
     free_entries(prefill, n_prefill);
     free_entries(extra, n_ops);
-    return { n_prefill, total_slots, swiss_elapsed / ops_total, std_elapsed / ops_total };
+    return { n_prefill, total_slots, swiss_elapsed / ops_total, std_elapsed / ops_total, absl_elapsed / ops_total };
 }
 
 // ---------------------------------------------------------------------------
@@ -205,12 +229,27 @@ static Result bench_mixed(u64 total_slots) {
     }
     u64 std_elapsed = ns() - t0;
 
+    // --- absl::flat_hash_map ---
+    absl::flat_hash_map<std::string, u32> absmap;
+    absmap.reserve(n_prefill);
+    for (u64 i = 0; i < n_prefill; i++) {
+        absmap[prefill[i].key] = prefill[i].value;
+    }
+
+    t0 = ns();
+    for (u64 i = 0; i < n_rounds; i++) {
+        absmap[extra[i].key] = extra[i].value;
+        absmap.erase(delete_keys[i]);
+        absmap.find(lookup_keys[i]);
+    }
+    u64 absl_elapsed = ns() - t0;
+
     u64 ops_total = n_rounds * 3;
     delete[] delete_keys;
     delete[] lookup_keys;
     free_entries(prefill, n_prefill);
     free_entries(extra, n_rounds);
-    return { n_prefill, total_slots, swiss_elapsed / ops_total, std_elapsed / ops_total };
+    return { n_prefill, total_slots, swiss_elapsed / ops_total, std_elapsed / ops_total, absl_elapsed / ops_total };
 }
 
 // ---------------------------------------------------------------------------
@@ -250,26 +289,40 @@ static Result bench_resize(u64 n_entries) {
     }
     u64 std_elapsed = ns() - t0;
 
+    // --- absl::flat_hash_map ---
+    absl::flat_hash_map<std::string, u32> absmap;
+
+    t0 = ns();
+    for (u64 i = 0; i < n_entries; i++) {
+        absmap[entries[i].key] = entries[i].value;
+    }
+    for (u64 i = 0; i < n_deletes; i++) {
+        absmap.erase(entries[i].key);
+    }
+    u64 absl_elapsed = ns() - t0;
+
     u64 ops_total = n_entries + n_deletes;
     free_entries(entries, n_entries);
-    return { n_entries, 32, swiss_elapsed / ops_total, std_elapsed / ops_total };
+    return { n_entries, 32, swiss_elapsed / ops_total, std_elapsed / ops_total, absl_elapsed / ops_total };
 }
 
 static void print_header(const char* title) {
     std::printf("\n  --- %s ---\n", title);
-    std::printf("  %10s | %10s | %12s | %12s | %7s\n", "entries", "slots", "swiss (ns)", "stdmap (ns)", "speedup");
-    std::printf("  -----------+------------+--------------+--------------+--------\n");
+    std::printf("  %10s | %10s | %12s | %12s | %12s | %9s | %9s\n",
+                "entries", "slots", "swiss (ns)", "stdmap (ns)", "abseil (ns)", "vs stdmap", "vs abseil");
+    std::printf("  -----------+------------+--------------+--------------+--------------+-----------+----------\n");
 }
 
 static void print_row(Result& r) {
-    double speedup = (double)r.std_ns / (double)r.swiss_ns;
-    std::printf("  %10" PRIu64 " | %10" PRIu64 " | %12" PRIu64 " | %12" PRIu64 " | %6.2fx\n",
-                r.n_entries, r.total_slots, r.swiss_ns, r.std_ns, speedup);
+    double vs_std = (double)r.std_ns / (double)r.swiss_ns;
+    double vs_absl = (double)r.absl_ns / (double)r.swiss_ns;
+    std::printf("  %10" PRIu64 " | %10" PRIu64 " | %12" PRIu64 " | %12" PRIu64 " | %12" PRIu64 " | %8.2fx | %8.2fx\n",
+                r.n_entries, r.total_slots, r.swiss_ns, r.std_ns, r.absl_ns, vs_std, vs_absl);
 }
 
 int main() {
     // Bench 1: Lookup-heavy
-    print_header("Lookup-heavy (95% hit, 5% miss)");
+    print_header("Lookup-heavy (100% hit)");
     for (u64 slots = 1024; slots <= 1'048'576; slots *= 2) {
         Result r = bench_lookup(slots);
         print_row(r);
